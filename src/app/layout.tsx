@@ -2,7 +2,9 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.APP_BASE_URL ?? "http://localhost:3000"),
+  // `||` (not `??`) so an empty-string env var — e.g. a blank value saved in
+  // a hosting dashboard — still falls back instead of reaching `new URL("")`.
+  metadataBase: new URL(process.env.APP_BASE_URL || "http://localhost:3000"),
   title: {
     default: "Instant Win Campaign | Scan. Verify. Win.",
     template: "%s | Instant Win Campaign",

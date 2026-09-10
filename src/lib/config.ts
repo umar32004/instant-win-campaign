@@ -55,6 +55,10 @@ const rawEnv = {
   DATABASE_URL: process.env.DATABASE_URL || "sqlserver://localhost:1433;database=dev;user=sa;password=devOnly!Passw0rd;trustServerCertificate=true",
   JWT_ACCESS_SECRET: process.env.JWT_ACCESS_SECRET || "dev-only-access-secret-change-me-please-0000",
   JWT_REFRESH_SECRET: process.env.JWT_REFRESH_SECRET || "dev-only-refresh-secret-change-me-please-0000",
+  // `||` (not zod's `.default()`) so a variable saved as an empty string in a
+  // hosting dashboard — as opposed to genuinely unset — still falls back
+  // instead of failing `.url()` validation on "".
+  APP_BASE_URL: process.env.APP_BASE_URL || "http://localhost:3000",
 };
 
 const parsed = envSchema.safeParse(rawEnv);
