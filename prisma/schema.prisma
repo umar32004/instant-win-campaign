@@ -1,0 +1,320 @@
+// =============================================================================
+// Hayatna Instant Win Campaign — Prisma Schema
+// Target: Azure SQL Database (SQL Server provider). See README for local dev
+// options (SQL Server container or `docker compose up db`).
+//
+// NOTE: the SQL Server connector does not support native enum types, so status
+// / role / type columns are plain strings constrained by the app layer. The
+// canonical allowed values for each are defined as TS union types in
+// src/types/enums.ts (single source of truth, validated via zod at the API
+// boundary) — the comment above each field below mirrors that list.
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+}
+
+// -----------------------------------------------------------------------------
+// Core campaign configuration
+// -----------------------------------------------------------------------------
+
+model Campaign {
+  id                          String   @id @default(cuid())
+  name                        String
+  slug                        String   @unique
+  description                 String?  @db.NVarChar(2000)
+  /// DRAFT | ACTIVE | PAUSED | ENDED
+  status                      String   @default("DRAFT")
+  startDate                   DateTime
+  endDate                     DateTime
+  minPurchaseAmountAed        Decimal  @default(0) @db.Decimal(10, 2)
+  receiptConfidenceThreshold  Float    @default(0.6)
+  maxSubmissionsPerUserPerDay Int      @default(3)
+  fuzzyMatchThreshold         Float    @default(0.72)
+  termsUrl                    String?
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  prizes   Prize[]
+  receipts Receipt[]
+  winners  Winner[]
+
+  @@map("campaigns")
+}
+
+model Prize {
+  id                String   @id @default(cuid())
+  campaignId        String
+  name              String
+  description       String?  @db.NVarChar(1000)
+  imageUrl          String?
+  /// STANDARD | PREMIUM | GRAND
+  tier              String   @default("STANDARD")
+  probabilityWeight Float    @default(1)
+  isActive          Boolean  @default(true)
+  sortOrder         Int      @default(0)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  campaign  Campaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  inventory PrizeInventory?
+  winners   Winner[]
+
+  @@index([campaignId])
+  @@map("prizes")
+}
+
+model PrizeInventory {
+  id              String   @id @default(cuid())
+  prizeId         String   @unique
+  totalStock      Int
+  remainingStock  Int
+  dailyLimit      Int?
+  dailyAwarded    Int      @default(0)
+  weeklyLimit     Int?
+  weeklyAwarded   Int      @default(0)
+  campaignLimit   Int?
+  campaignAwarded Int      @default(0)
+  lastDailyReset  DateTime @default(now())
+  lastWeeklyReset DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  prize Prize @relation(fields: [prizeId], references: [id], onDelete: Cascade)
+
+  @@map("prize_inventory")
+}
+
+// -----------------------------------------------------------------------------
+// Participants
+// -----------------------------------------------------------------------------
+
+model User {
+  id                String    @id @default(cuid())
+  fullName          String
+  mobileNumber      String    @unique
+  email             String    @unique
+  emirate           String
+  ageConfirmed      Boolean   @default(false)
+  termsAcceptedAt   DateTime?
+  registrationIp    String?
+  deviceFingerprint String?
+  isBlacklisted     Boolean   @default(false)
+  blacklistReason   String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  receipts      Receipt[]
+  winners       Winner[]
+  notifications Notification[]
+  fraudLogs     FraudLog[]
+
+  @@index([mobileNumber])
+  @@index([email])
+  @@map("users")
+}
+
+model OtpVerification {
+  id           String   @id @default(cuid())
+  mobileNumber String
+  otpHash      String
+  /// REGISTRATION | LOGIN
+  purpose      String
+  expiresAt    DateTime
+  attempts     Int      @default(0)
+  verified     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@index([mobileNumber, purpose])
+  @@map("otp_verifications")
+}
+
+// -----------------------------------------------------------------------------
+// Receipts & OCR verification
+// -----------------------------------------------------------------------------
+
+model Receipt {
+  id                     String    @id @default(cuid())
+  userId                 String
+  campaignId             String
+  storeNameRaw           String?
+  storeNameNormalized    String?
+  receiptNumber          String?
+  transactionDate        DateTime?
+  currency               String?
+  totalAmount            Decimal?  @db.Decimal(10, 2)
+  subtotal               Decimal?  @db.Decimal(10, 2)
+  taxAmount              Decimal?  @db.Decimal(10, 2)
+  imageUrl               String
+  imageSha256            String
+  ocrConfidence          Float?
+  ocrRawResult           String?   @db.NVarChar(4000)
+  hayatnaProductDetected Boolean   @default(false)
+  hayatnaConfidence      Float?
+  /// PENDING | PROCESSING | APPROVED | REJECTED | FLAGGED
+  status                 String    @default("PENDING")
+  rejectionReason        String?
+  ipAddress              String?
+  deviceFingerprint      String?
+  isBlacklisted          Boolean   @default(false)
+  blacklistReason        String?
+  submittedAt            DateTime  @default(now())
+  verifiedAt             DateTime?
+
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaign  Campaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  items     ReceiptItem[]
+  winner    Winner?
+  fraudLogs FraudLog[]
+
+  @@index([userId])
+  @@index([campaignId])
+  @@index([receiptNumber])
+  @@index([imageSha256])
+  @@index([status])
+  @@map("receipts")
+}
+
+model ReceiptItem {
+  id               String   @id @default(cuid())
+  receiptId        String
+  rawText          String
+  normalizedName   String?
+  matchedSku       String?
+  isHayatnaProduct Boolean  @default(false)
+  matchConfidence  Float?
+  quantity         Float?
+  unitPrice        Decimal? @db.Decimal(10, 2)
+  lineTotal        Decimal? @db.Decimal(10, 2)
+
+  receipt Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  @@index([receiptId])
+  @@map("receipt_items")
+}
+
+// -----------------------------------------------------------------------------
+// Winners
+// -----------------------------------------------------------------------------
+
+model Winner {
+  id             String   @id @default(cuid())
+  winnerCode     String   @unique
+  userId         String
+  receiptId      String   @unique
+  prizeId        String
+  campaignId     String
+  storeName      String?
+  /// PENDING_REDEMPTION | REDEEMED | EXPIRED | CANCELLED
+  status         String   @default("PENDING_REDEMPTION")
+  redemptionCode String   @unique
+  wonAt          DateTime @default(now())
+  redeemedAt     DateTime?
+  notes          String?
+
+  // Winner rows cascade only through their Receipt (User/Campaign already cascade to
+  // Receipt); the other FKs use NoAction to avoid SQL Server's multiple-cascade-path
+  // restriction while still enforcing referential integrity.
+  user     User     @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  receipt  Receipt  @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+  prize    Prize    @relation(fields: [prizeId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([prizeId])
+  @@index([campaignId])
+  @@map("winners")
+}
+
+// -----------------------------------------------------------------------------
+// Admin & platform operations
+// -----------------------------------------------------------------------------
+
+model Admin {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  /// SUPER_ADMIN | ADMIN | VIEWER
+  role         String    @default("ADMIN")
+  isActive     Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@map("admins")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  /// ADMIN | SYSTEM | USER
+  actorType  String
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   String?  @db.NVarChar(4000)
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([actorId])
+  @@map("audit_logs")
+}
+
+model SystemSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String   @db.NVarChar(2000)
+  description String?
+  updatedBy   String?
+  updatedAt   DateTime @updatedAt
+
+  @@map("system_settings")
+}
+
+model Notification {
+  id     String @id @default(cuid())
+  userId String
+  /// RECEIPT_RECEIVED | RECEIPT_APPROVED | RECEIPT_REJECTED | WINNER_ANNOUNCED | PRIZE_CLAIMED
+  type   String
+  /// SMS | EMAIL | IN_APP
+  channel String @default("IN_APP")
+  /// PENDING | SENT | FAILED
+  status  String @default("PENDING")
+  title   String
+  message String
+
+  sentAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+}
+
+model FraudLog {
+  id                String   @id @default(cuid())
+  userId            String?
+  receiptId         String?
+  ruleTriggered     String
+  /// LOW | MEDIUM | HIGH | CRITICAL
+  severity          String   @default("MEDIUM")
+  details           String?  @db.NVarChar(2000)
+  ipAddress         String?
+  deviceFingerprint String?
+  createdAt         DateTime @default(now())
+
+  user    User?    @relation(fields: [userId], references: [id], onDelete: SetNull, onUpdate: NoAction)
+  receipt Receipt? @relation(fields: [receiptId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([userId])
+  @@index([receiptId])
+  @@index([ruleTriggered])
+  @@map("fraud_logs")
+}

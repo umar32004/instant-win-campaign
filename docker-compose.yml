@@ -1,0 +1,16 @@
+# Local development convenience: a SQL Server container standing in for
+# Azure SQL Database. Not used in production — see infra/main.bicep.
+services:
+  db:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: hayatna-sql
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "YourStrong!Passw0rd"
+    ports:
+      - "1433:1433"
+    volumes:
+      - hayatna_sql_data:/var/opt/mssql
+
+volumes:
+  hayatna_sql_data:

@@ -1,0 +1,9 @@
+node_modules
+.next
+local-uploads
+.env
+.env.local
+npm-debug.log*
+.git
+.github
+coverage
